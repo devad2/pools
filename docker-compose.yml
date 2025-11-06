@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  # PostgreSQL with PostgresML extensions (includes pg_cron)
+  postgres:
+    image: ghcr.io/postgresml/postgresml:2.10.0
+    container_name: poolside-postgres
+    environment:
+      POSTGRES_DB: poolside
+      POSTGRES_USER: poolside_user
+      POSTGRES_PASSWORD: poolside_pass
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - poolside-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U poolside_user -d poolside"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # PostgREST API service
+  postgrest:
+    image: postgrest/postgrest:latest
+    container_name: poolside-api
+    environment:
+      PGRST_DB_URI: postgres://poolside_user:poolside_pass@postgres:5432/poolside
+      PGRST_DB_SCHEMA: api
+      PGRST_DB_ANON_ROLE: web_anon
+      PGRST_SERVER_PORT: 3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - poolside-network
+
+networks:
+  poolside-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
