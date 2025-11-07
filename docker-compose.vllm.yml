@@ -1,0 +1,45 @@
+# Optional: Local vLLM service
+# Use this if you want to run vLLM locally instead of using an external endpoint
+#
+# To use: docker-compose -f docker-compose.yml -f docker-compose.vllm.yml up -d
+
+version: '3.8'
+
+services:
+  # vLLM for LLM inference (optional - only if not using external endpoint)
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: poolside-vllm
+    environment:
+      - MODEL_NAME=${VLLM_MODEL:-microsoft/Phi-3-mini-4k-instruct}
+    command:
+      - "--model"
+      - "${VLLM_MODEL:-microsoft/Phi-3-mini-4k-instruct}"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+      - "--max-model-len"
+      - "${VLLM_MAX_MODEL_LEN:-4096}"
+    ports:
+      - "${VLLM_PORT:-8000}:8000"
+    networks:
+      - poolside-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    # Uncomment if you have GPU available
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+networks:
+  poolside-network:
+    external: true
+    name: pools_poolside-network

@@ -1,13 +1,4 @@
--- Initialize database with PostgresML extensions
-CREATE EXTENSION IF NOT EXISTS pgml;
-CREATE EXTENSION IF NOT EXISTS vector;
-CREATE EXTENSION IF NOT EXISTS pg_cron;
-
--- Configure pg_cron to use our database
-ALTER SYSTEM SET cron.database_name = 'poolside';
-SELECT pg_reload_conf();
-
--- Create roles
+-- Create roles for PostgREST
 CREATE ROLE web_anon NOLOGIN;
 GRANT USAGE ON SCHEMA public TO web_anon;
 
@@ -25,188 +16,132 @@ CREATE TABLE IF NOT EXISTS api.messages (
 -- Seed initial data
 INSERT INTO api.messages (content) VALUES ('hello world');
 
--- RAG data storage
+-- RAG document storage (simplified - no embeddings)
 CREATE TABLE IF NOT EXISTS api.rag_documents (
     id SERIAL PRIMARY KEY,
     title TEXT NOT NULL,
     content TEXT NOT NULL,
-    embedding VECTOR(768),
     metadata JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Model training jobs
-CREATE TABLE IF NOT EXISTS api.training_jobs (
-    id SERIAL PRIMARY KEY,
-    job_type VARCHAR(50) NOT NULL,
-    status VARCHAR(20) DEFAULT 'pending',
-    params JSONB,
-    started_at TIMESTAMP,
-    completed_at TIMESTAMP,
-    error_message TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+-- Seed some example documents
+INSERT INTO api.rag_documents (title, content, metadata) VALUES
+('Python Basics', 'Python is a high-level programming language. It uses indentation for code blocks and has dynamic typing.', '{"category": "programming"}'),
+('JavaScript Guide', 'JavaScript is the language of the web. It runs in browsers and on servers via Node.js.', '{"category": "programming"}'),
+('Docker Overview', 'Docker is a containerization platform that packages applications with their dependencies.', '{"category": "devops"}'),
+('SQL Tutorial', 'SQL is used to query relational databases. Common commands include SELECT, INSERT, UPDATE, and DELETE.', '{"category": "database"}'),
+('Git Commands', 'Git is a version control system. Use git commit to save changes and git push to share them.', '{"category": "devops"}');
 
--- User conversations for fine-tuning
+-- User conversations
 CREATE TABLE IF NOT EXISTS api.conversations (
     id SERIAL PRIMARY KEY,
     user_id INTEGER,
     session_id UUID DEFAULT gen_random_uuid(),
-    input_text TEXT NOT NULL,
-    output_text TEXT,
-    feedback_score INTEGER,
+    query TEXT NOT NULL,
+    response TEXT,
+    context_docs INTEGER[], -- Array of document IDs used for context
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Model metrics
-CREATE TABLE IF NOT EXISTS api.model_metrics (
-    id SERIAL PRIMARY KEY,
-    model_name VARCHAR(100),
-    metric_type VARCHAR(50),
-    value NUMERIC,
-    metadata JSONB,
-    recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Create views for API access
+-- Create view for API access
 CREATE OR REPLACE VIEW api.hello AS
     SELECT content FROM api.messages WHERE id = 1;
 
--- Function for RAG search
+-- Simple keyword-based document search function
 CREATE OR REPLACE FUNCTION api.search_documents(query_text TEXT, limit_count INTEGER DEFAULT 5)
 RETURNS TABLE(
     id INTEGER,
     title TEXT,
     content TEXT,
-    similarity FLOAT
+    relevance FLOAT
 ) AS $$
 BEGIN
     RETURN QUERY
-    SELECT 
+    SELECT
         d.id,
         d.title,
         d.content,
-        1 - (d.embedding <=> pgml.embed('sentence-transformers/all-MiniLM-L6-v2', query_text))::float AS similarity
+        -- Simple relevance scoring based on keyword matching
+        (
+            -- Count how many words from query appear in title (weighted 2x)
+            (SELECT COUNT(*) FROM unnest(string_to_array(lower(query_text), ' ')) AS word
+             WHERE lower(d.title) LIKE '%' || word || '%') * 2.0 +
+            -- Count how many words from query appear in content
+            (SELECT COUNT(*) FROM unnest(string_to_array(lower(query_text), ' ')) AS word
+             WHERE lower(d.content) LIKE '%' || word || '%')
+        )::FLOAT AS relevance
     FROM api.rag_documents d
-    WHERE d.embedding IS NOT NULL
-    ORDER BY d.embedding <=> pgml.embed('sentence-transformers/all-MiniLM-L6-v2', query_text)
+    WHERE
+        lower(d.title) LIKE '%' || lower(query_text) || '%' OR
+        lower(d.content) LIKE '%' || lower(query_text) || '%' OR
+        EXISTS (
+            SELECT 1 FROM unnest(string_to_array(lower(query_text), ' ')) AS word
+            WHERE lower(d.title) LIKE '%' || word || '%' OR lower(d.content) LIKE '%' || word || '%'
+        )
+    ORDER BY relevance DESC
     LIMIT limit_count;
 END;
 $$ LANGUAGE plpgsql;
 
--- Function to trigger model fine-tuning
-CREATE OR REPLACE FUNCTION api.schedule_training(job_type TEXT, params JSONB DEFAULT '{}')
-RETURNS api.training_jobs AS $$
+-- Function to get RAG response (retrieves docs but doesn't call LLM - that's done by client)
+CREATE OR REPLACE FUNCTION api.rag_query(user_query TEXT, doc_limit INTEGER DEFAULT 3)
+RETURNS TABLE(
+    query TEXT,
+    documents JSONB,
+    prompt TEXT
+) AS $$
 DECLARE
-    new_job api.training_jobs;
+    docs JSONB;
+    context_text TEXT;
+    full_prompt TEXT;
 BEGIN
-    INSERT INTO api.training_jobs (job_type, status, params)
-    VALUES (job_type, 'pending', params)
-    RETURNING * INTO new_job;
-    
-    -- Trigger notification for scheduler
-    PERFORM pg_notify('training_job', json_build_object(
-        'job_id', new_job.id,
-        'job_type', new_job.job_type
-    )::text);
-    
-    RETURN new_job;
-END;
-$$ LANGUAGE plpgsql;
+    -- Get relevant documents
+    SELECT jsonb_agg(jsonb_build_object(
+        'id', s.id,
+        'title', s.title,
+        'content', s.content,
+        'relevance', s.relevance
+    ))
+    INTO docs
+    FROM api.search_documents(user_query, doc_limit) s;
 
--- Function to process training job (called by scheduler)
-CREATE OR REPLACE FUNCTION api.process_training_job(job_id INTEGER)
-RETURNS VOID AS $$
-DECLARE
-    job api.training_jobs;
-BEGIN
-    SELECT * INTO job FROM api.training_jobs WHERE id = job_id;
-    
-    IF job.status != 'pending' THEN
-        RETURN;
-    END IF;
-    
-    UPDATE api.training_jobs 
-    SET status = 'processing', started_at = CURRENT_TIMESTAMP
-    WHERE id = job_id;
-    
-    -- Simulate training based on job type
-    CASE job.job_type
-        WHEN 'fine_tune' THEN
-            -- Fine-tune model on conversation data
-            PERFORM pgml.train(
-                project_name => 'poolside_model',
-                task => 'text-generation',
-                relation_name => 'api.conversations',
-                y_column_name => 'output_text',
-                algorithm => 'linear',
-                hyperparams => '{"max_iter": 100}'::jsonb
-            );
-        WHEN 'embed_documents' THEN
-            -- Generate embeddings for new documents
-            UPDATE api.rag_documents
-            SET embedding = pgml.embed('sentence-transformers/all-MiniLM-L6-v2', content)
-            WHERE embedding IS NULL;
-        ELSE
-            RAISE EXCEPTION 'Unknown job type: %', job.job_type;
-    END CASE;
-    
-    UPDATE api.training_jobs 
-    SET status = 'completed', completed_at = CURRENT_TIMESTAMP
-    WHERE id = job_id;
-    
-EXCEPTION
-    WHEN OTHERS THEN
-        UPDATE api.training_jobs 
-        SET status = 'failed', 
-            completed_at = CURRENT_TIMESTAMP,
-            error_message = SQLERRM
-        WHERE id = job_id;
+    -- Build context from documents
+    SELECT string_agg(
+        format('Document %s - %s: %s', s.id, s.title, s.content),
+        E'\n\n'
+    )
+    INTO context_text
+    FROM api.search_documents(user_query, doc_limit) s;
+
+    -- Build prompt for LLM
+    full_prompt := format(
+        'Context documents:
+%s
+
+User question: %s
+
+Please answer the question based on the context documents provided above. If the context does not contain relevant information, say so.',
+        COALESCE(context_text, 'No relevant documents found.'),
+        user_query
+    );
+
+    RETURN QUERY SELECT
+        user_query,
+        COALESCE(docs, '[]'::jsonb),
+        full_prompt;
 END;
 $$ LANGUAGE plpgsql;
 
 -- Grant permissions
 GRANT SELECT ON api.messages TO web_anon;
 GRANT SELECT ON api.hello TO web_anon;
-GRANT SELECT ON api.rag_documents TO web_anon;
+GRANT SELECT, INSERT ON api.rag_documents TO web_anon;
 GRANT SELECT, INSERT ON api.conversations TO web_anon;
-GRANT SELECT ON api.model_metrics TO web_anon;
-GRANT SELECT, INSERT ON api.training_jobs TO web_anon;
 GRANT EXECUTE ON FUNCTION api.search_documents TO web_anon;
-GRANT EXECUTE ON FUNCTION api.schedule_training TO web_anon;
+GRANT EXECUTE ON FUNCTION api.rag_query TO web_anon;
 
 -- Create indexes for performance
-CREATE INDEX idx_rag_embedding ON api.rag_documents USING ivfflat (embedding vector_cosine_ops);
+CREATE INDEX idx_rag_title ON api.rag_documents USING gin (to_tsvector('english', title));
+CREATE INDEX idx_rag_content ON api.rag_documents USING gin (to_tsvector('english', content));
 CREATE INDEX idx_conversations_created ON api.conversations(created_at DESC);
-CREATE INDEX idx_training_jobs_status ON api.training_jobs(status);
-CREATE INDEX idx_model_metrics_time ON api.model_metrics(recorded_at DESC);
-
--- Schedule background jobs using pg_cron
--- Process training jobs every hour
-SELECT cron.schedule('process-training-jobs', '0 * * * *', $$
-    SELECT api.process_training_job(id) 
-    FROM api.training_jobs 
-    WHERE status = 'pending' 
-    LIMIT 1;
-$$);
-
--- Generate embeddings for new documents every 30 minutes
-SELECT cron.schedule('generate-embeddings', '*/30 * * * *', $$
-    UPDATE api.rag_documents 
-    SET embedding = pgml.embed('sentence-transformers/all-MiniLM-L6-v2', content) 
-    WHERE embedding IS NULL 
-    LIMIT 100;
-$$);
-
--- Clean up old metrics daily at 2 AM
-SELECT cron.schedule('cleanup-metrics', '0 2 * * *', $$
-    DELETE FROM api.model_metrics 
-    WHERE recorded_at < NOW() - INTERVAL '30 days';
-$$);
-
--- Fine-tune model weekly (Sunday at 3 AM) if there's enough new data
-SELECT cron.schedule('weekly-fine-tune', '0 3 * * 0', $$
-    INSERT INTO api.training_jobs (job_type, params) 
-    SELECT 'fine_tune', '{"auto": true}'::jsonb 
-    WHERE (SELECT COUNT(*) FROM api.conversations WHERE created_at > NOW() - INTERVAL '7 days') > 100;
-$$);

@@ -1,9 +1,25 @@
 #!/bin/bash
 
-echo "🧪 Testing Poolside Platform API"
-echo "================================"
+# Load environment variables from .env file if it exists
+if [ -f .env ]; then
+    export $(cat .env | grep -v '^#' | xargs)
+fi
 
-API_URL="http://localhost:3000"
+echo "Testing Simple RAG System"
+echo "========================="
+echo ""
+
+# Use environment variables or defaults
+API_URL="${API_URL:-http://localhost:${POSTGREST_PORT:-3000}}"
+LLM_ENDPOINT="${LLM_ENDPOINT:-http://localhost:8000}"
+LLM_MODEL="${LLM_MODEL:-microsoft/Phi-3-mini-4k-instruct}"
+LLM_API_KEY="${LLM_API_KEY:-}"
+
+echo "Configuration:"
+echo "  API URL: $API_URL"
+echo "  LLM Endpoint: $LLM_ENDPOINT"
+echo "  LLM Model: $LLM_MODEL"
+echo ""
 
 # Function to pretty print JSON
 pretty_json() {
@@ -11,75 +27,150 @@ pretty_json() {
 }
 
 # Wait for API to be ready
-echo "⏳ Waiting for API to be ready..."
+echo "Waiting for PostgREST API to be ready..."
 until curl -s $API_URL/hello > /dev/null 2>&1; do
     sleep 1
 done
+echo "✓ PostgREST API is ready"
+
+# Check if LLM endpoint is available
+echo "Checking LLM endpoint availability..."
+if curl -s "$LLM_ENDPOINT/health" > /dev/null 2>&1 || curl -s "$LLM_ENDPOINT/v1/models" > /dev/null 2>&1; then
+    echo "✓ LLM endpoint is ready"
+else
+    echo "⚠ Warning: LLM endpoint not responding. LLM tests may fail."
+    echo "  Make sure your LLM server is running at: $LLM_ENDPOINT"
+fi
 
 echo ""
-echo "1️⃣  Testing Hello World endpoint:"
-echo "   GET $API_URL/hello"
+echo "=========================================="
+echo "Test 1: Hello World"
+echo "=========================================="
+echo "GET $API_URL/hello"
 response=$(curl -s $API_URL/hello)
 pretty_json "$response"
 
 echo ""
-echo "2️⃣  Testing Messages endpoint:"
-echo "   GET $API_URL/messages"
-response=$(curl -s $API_URL/messages)
+echo "=========================================="
+echo "Test 2: List all RAG documents"
+echo "=========================================="
+echo "GET $API_URL/rag_documents"
+response=$(curl -s $API_URL/rag_documents)
 pretty_json "$response"
 
 echo ""
-echo "3️⃣  Adding a conversation:"
-echo "   POST $API_URL/conversations"
-response=$(curl -s -X POST $API_URL/conversations \
-    -H "Content-Type: application/json" \
-    -d '{
-        "user_id": 1,
-        "input_text": "How do I implement a REST API?",
-        "output_text": "To implement a REST API, you need to follow RESTful principles...",
-        "feedback_score": 5
-    }')
-pretty_json "$response"
-
-echo ""
-echo "4️⃣  Adding a RAG document:"
-echo "   POST $API_URL/rag_documents"
-response=$(curl -s -X POST $API_URL/rag_documents \
-    -H "Content-Type: application/json" \
-    -d '{
-        "title": "REST API Best Practices",
-        "content": "When building REST APIs, consider these principles: statelessness, resource-based URLs, HTTP methods...",
-        "metadata": {"category": "documentation", "version": "1.0"}
-    }')
-pretty_json "$response"
-
-echo ""
-echo "5️⃣  Scheduling a training job:"
-echo "   POST $API_URL/rpc/schedule_training"
-response=$(curl -s -X POST $API_URL/rpc/schedule_training \
-    -H "Content-Type: application/json" \
-    -d '{
-        "job_type": "embed_documents",
-        "params": {"batch_size": 10}
-    }')
-pretty_json "$response"
-
-echo ""
-echo "6️⃣  Viewing training jobs:"
-echo "   GET $API_URL/training_jobs"
-response=$(curl -s "$API_URL/training_jobs?order=created_at.desc&limit=5")
-pretty_json "$response"
-
-echo ""
-echo "7️⃣  Searching documents (RAG):"
-echo "   POST $API_URL/rpc/search_documents"
+echo "=========================================="
+echo "Test 3: Search for documents about 'python'"
+echo "=========================================="
+echo "POST $API_URL/rpc/search_documents"
 response=$(curl -s -X POST $API_URL/rpc/search_documents \
     -H "Content-Type: application/json" \
     -d '{
-        "query_text": "REST API",
+        "query_text": "python programming",
         "limit_count": 3
     }')
 pretty_json "$response"
 
 echo ""
-echo "✅ API tests completed!"
+echo "=========================================="
+echo "Test 4: Get RAG query with prompt"
+echo "=========================================="
+echo "POST $API_URL/rpc/rag_query"
+response=$(curl -s -X POST $API_URL/rpc/rag_query \
+    -H "Content-Type: application/json" \
+    -d '{
+        "user_query": "How does Python work?"
+    }')
+pretty_json "$response"
+
+# Extract the prompt for the next test
+prompt=$(echo "$response" | jq -r '.[0].prompt // empty' 2>/dev/null)
+
+echo ""
+echo "=========================================="
+echo "Test 5: Call LLM with the generated prompt"
+echo "=========================================="
+echo "POST $LLM_ENDPOINT/v1/completions"
+
+# Build authorization header if API key is set
+AUTH_HEADER=""
+if [ -n "$LLM_API_KEY" ]; then
+    AUTH_HEADER="-H \"Authorization: Bearer $LLM_API_KEY\""
+fi
+
+if [ -n "$prompt" ]; then
+    if [ -n "$LLM_API_KEY" ]; then
+        response=$(curl -s -X POST "$LLM_ENDPOINT/v1/completions" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $LLM_API_KEY" \
+            -d "{
+                \"model\": \"$LLM_MODEL\",
+                \"prompt\": $(echo "$prompt" | jq -R -s .),
+                \"max_tokens\": 200,
+                \"temperature\": 0.7
+            }")
+    else
+        response=$(curl -s -X POST "$LLM_ENDPOINT/v1/completions" \
+            -H "Content-Type: application/json" \
+            -d "{
+                \"model\": \"$LLM_MODEL\",
+                \"prompt\": $(echo "$prompt" | jq -R -s .),
+                \"max_tokens\": 200,
+                \"temperature\": 0.7
+            }")
+    fi
+    pretty_json "$response"
+else
+    echo "⚠ No prompt generated, testing with simple prompt instead"
+    if [ -n "$LLM_API_KEY" ]; then
+        response=$(curl -s -X POST "$LLM_ENDPOINT/v1/completions" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $LLM_API_KEY" \
+            -d "{
+                \"model\": \"$LLM_MODEL\",
+                \"prompt\": \"What is Python?\",
+                \"max_tokens\": 100
+            }")
+    else
+        response=$(curl -s -X POST "$LLM_ENDPOINT/v1/completions" \
+            -H "Content-Type: application/json" \
+            -d "{
+                \"model\": \"$LLM_MODEL\",
+                \"prompt\": \"What is Python?\",
+                \"max_tokens\": 100
+            }")
+    fi
+    pretty_json "$response"
+fi
+
+echo ""
+echo "=========================================="
+echo "Test 6: Add a new document"
+echo "=========================================="
+echo "POST $API_URL/rag_documents"
+response=$(curl -s -X POST $API_URL/rag_documents \
+    -H "Content-Type: application/json" \
+    -d '{
+        "title": "Rust Programming",
+        "content": "Rust is a systems programming language focused on safety, speed, and concurrency.",
+        "metadata": {"category": "programming"}
+    }')
+pretty_json "$response"
+
+echo ""
+echo "=========================================="
+echo "Test 7: Search for the new document"
+echo "=========================================="
+echo "POST $API_URL/rpc/search_documents"
+response=$(curl -s -X POST $API_URL/rpc/search_documents \
+    -H "Content-Type: application/json" \
+    -d '{
+        "query_text": "rust programming",
+        "limit_count": 3
+    }')
+pretty_json "$response"
+
+echo ""
+echo "=========================================="
+echo "✓ All tests completed!"
+echo "=========================================="
