@@ -141,6 +141,11 @@ GRANT SELECT, INSERT ON api.conversations TO web_anon;
 GRANT EXECUTE ON FUNCTION api.search_documents TO web_anon;
 GRANT EXECUTE ON FUNCTION api.rag_query TO web_anon;
 
+-- Grant sequence permissions for INSERT operations
+GRANT USAGE, SELECT ON SEQUENCE api.rag_documents_id_seq TO web_anon;
+GRANT USAGE, SELECT ON SEQUENCE api.conversations_id_seq TO web_anon;
+GRANT USAGE, SELECT ON SEQUENCE api.messages_id_seq TO web_anon;
+
 -- Create indexes for performance
 CREATE INDEX idx_rag_title ON api.rag_documents USING gin (to_tsvector('english', title));
 CREATE INDEX idx_rag_content ON api.rag_documents USING gin (to_tsvector('english', content));

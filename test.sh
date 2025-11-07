@@ -90,31 +90,35 @@ echo ""
 echo "=========================================="
 echo "Test 5: Call LLM with the generated prompt"
 echo "=========================================="
-echo "POST $LLM_ENDPOINT/v1/completions"
-
-# Build authorization header if API key is set
-AUTH_HEADER=""
-if [ -n "$LLM_API_KEY" ]; then
-    AUTH_HEADER="-H \"Authorization: Bearer $LLM_API_KEY\""
-fi
+echo "POST $LLM_ENDPOINT/v1/chat/completions"
 
 if [ -n "$prompt" ]; then
     if [ -n "$LLM_API_KEY" ]; then
-        response=$(curl -s -X POST "$LLM_ENDPOINT/v1/completions" \
+        response=$(curl -s -X POST "$LLM_ENDPOINT/v1/chat/completions" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $LLM_API_KEY" \
             -d "{
                 \"model\": \"$LLM_MODEL\",
-                \"prompt\": $(echo "$prompt" | jq -R -s .),
+                \"messages\": [
+                    {
+                        \"role\": \"user\",
+                        \"content\": $(echo "$prompt" | jq -R -s .)
+                    }
+                ],
                 \"max_tokens\": 200,
                 \"temperature\": 0.7
             }")
     else
-        response=$(curl -s -X POST "$LLM_ENDPOINT/v1/completions" \
+        response=$(curl -s -X POST "$LLM_ENDPOINT/v1/chat/completions" \
             -H "Content-Type: application/json" \
             -d "{
                 \"model\": \"$LLM_MODEL\",
-                \"prompt\": $(echo "$prompt" | jq -R -s .),
+                \"messages\": [
+                    {
+                        \"role\": \"user\",
+                        \"content\": $(echo "$prompt" | jq -R -s .)
+                    }
+                ],
                 \"max_tokens\": 200,
                 \"temperature\": 0.7
             }")
@@ -123,21 +127,29 @@ if [ -n "$prompt" ]; then
 else
     echo "⚠ No prompt generated, testing with simple prompt instead"
     if [ -n "$LLM_API_KEY" ]; then
-        response=$(curl -s -X POST "$LLM_ENDPOINT/v1/completions" \
+        response=$(curl -s -X POST "$LLM_ENDPOINT/v1/chat/completions" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $LLM_API_KEY" \
             -d "{
                 \"model\": \"$LLM_MODEL\",
-                \"prompt\": \"What is Python?\",
-                \"max_tokens\": 100
+                \"messages\": [
+                    {
+                        \"role\": \"user\",
+                        \"content\": \"What is Python?\"
+                    }
+                ]
             }")
     else
-        response=$(curl -s -X POST "$LLM_ENDPOINT/v1/completions" \
+        response=$(curl -s -X POST "$LLM_ENDPOINT/v1/chat/completions" \
             -H "Content-Type: application/json" \
             -d "{
                 \"model\": \"$LLM_MODEL\",
-                \"prompt\": \"What is Python?\",
-                \"max_tokens\": 100
+                \"messages\": [
+                    {
+                        \"role\": \"user\",
+                        \"content\": \"What is Python?\"
+                    }
+                ]
             }")
     fi
     pretty_json "$response"
