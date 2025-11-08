@@ -1,6 +1,6 @@
 # Simple RAG System
 
-A minimal RAG (Retrieval-Augmented Generation) system using PostgreSQL, PostgREST, and any OpenAI-compatible LLM endpoint.
+A minimal RAG (Retrieval-Augmented Generation) demonstration using PostgreSQL, PostgREST, and any OpenAI-compatible LLM endpoint (Ollama, vLLM, OpenAI, etc.).
 
 ## Architecture
 
@@ -86,18 +86,9 @@ sequenceDiagram
 
 ## Components
 
-### PostgreSQL
-Document storage with keyword-based text search. No vector extensions needed.
-
-### PostgREST
-Auto-generated REST API from database schema. Database functions become API endpoints.
-
-### LLM Endpoint (External)
-Any OpenAI-compatible API:
-- **Ollama** - Local open-source models
-- **vLLM** - High-performance inference server
-- **OpenAI** - GPT-3.5/GPT-4
-- **Azure OpenAI** - Enterprise deployment
+- **PostgreSQL** - Document storage with keyword-based search (no vector extensions)
+- **PostgREST** - Auto-generated REST API from database schema
+- **External LLM** - Any OpenAI-compatible endpoint (Ollama, vLLM, OpenAI, Azure)
 
 ## API Reference
 
@@ -127,12 +118,11 @@ Any OpenAI-compatible API:
 
 Copy [.env.example](.env.example) to `.env` and configure your LLM endpoint:
 
-| Provider | LLM_ENDPOINT | LLM_MODEL | LLM_API_KEY |
-|----------|--------------|-----------|-------------|
-| **Ollama** | `http://localhost:11434` | `llama2` | (empty) |
-| **vLLM** | `https://your-vllm-server.com` | `meta-llama/Llama-2-7b-chat-hf` | (empty or token) |
-| **OpenAI** | `https://api.openai.com/v1` | `gpt-3.5-turbo` | `sk-your-key` |
-| **Azure OpenAI** | `https://<resource>.openai.azure.com/openai/deployments/<deployment>` | `gpt-35-turbo` | `your-azure-key` |
+```bash
+LLM_ENDPOINT=http://localhost:11434  # Ollama, vLLM, OpenAI, etc.
+LLM_MODEL=qwen3:0.6b
+LLM_API_KEY=                          # Optional, if required by endpoint
+```
 
 ## Project Structure
 
@@ -146,18 +136,11 @@ Copy [.env.example](.env.example) to `.env` and configure your LLM endpoint:
 └── README.md
 ```
 
-## Features
+## Technical Highlights
 
-- ✅ Simple keyword-based document search
-- ✅ Auto-generated REST API
-- ✅ Works with any OpenAI-compatible endpoint
-- ✅ No ML frameworks or vector databases required
-- ✅ Easy to understand and modify
-
-## Future Enhancements
-
-- Add pgvector for semantic search
-- Implement document embeddings
-- Build web UI
-- Add response caching
-- Implement authentication
+- Keyword-based search with relevance scoring
+- Auto-generated REST API from database schema
+- PostgreSQL functions exposed as RPC endpoints
+- OpenAI-compatible LLM integration
+- Docker Compose orchestration
+- No ML frameworks or vector databases required
