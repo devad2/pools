@@ -1,23 +1,27 @@
-# Simple RAG System - Demo Implementation
+# Simple RAG System
 
-## Architecture Diagram
+A minimal RAG (Retrieval-Augmented Generation) system using PostgreSQL, PostgREST, and any OpenAI-compatible LLM endpoint.
+
+## Architecture
 
 ```mermaid
 graph TB
-    subgraph "Local Docker Environment"
-        CLIENT[Client/User]
-
+    subgraph "Docker Services"
         API[PostgREST API<br/>Port 3000]
-        DB[(PostgreSQL<br/>Port 5432<br/>Simple Text Search)]
-        LLM[vLLM Server<br/>Port 8000<br/>Phi-3-mini]
+        DB[(PostgreSQL<br/>Port 5432)]
+    end
+
+    subgraph "External"
+        LLM[LLM Endpoint<br/>OpenAI Compatible]
+        CLIENT[Client/Application]
     end
 
     CLIENT -->|1. Query| API
     API -->|2. Search docs| DB
-    DB -->|3. Return docs + prompt| API
-    API -->|4. Call with prompt| LLM
-    LLM -->|5. Generate response| API
-    API -->|6. Return answer| CLIENT
+    DB -->|3. Docs + Prompt| API
+    API -->|4. Return| CLIENT
+    CLIENT -->|5. Call LLM| LLM
+    LLM -->|6. Response| CLIENT
 
     classDef database fill:#9333ea,stroke:#333,stroke-width:2px,color:#fff
     classDef api fill:#f59e0b,stroke:#333,stroke-width:2px,color:#fff
@@ -30,284 +34,130 @@ graph TB
     class CLIENT client
 ```
 
-## Data Flow Diagram
+## Data Flow
 
 ```mermaid
 sequenceDiagram
-    participant User
+    participant Client
     participant API as PostgREST
     participant DB as PostgreSQL
-    participant LLM as vLLM
+    participant LLM as LLM Endpoint
 
-    User->>API: POST /rpc/rag_query {query: "How does Python work?"}
-    API->>DB: Execute rag_query()
-    DB->>DB: Search documents (keyword matching)
-    DB->>DB: Build prompt with context
-    DB-->>API: Return {documents, prompt}
-    API-->>User: {documents: [...], prompt: "..."}
+    Client->>API: POST /rpc/rag_query
+    API->>DB: search_documents()
+    DB-->>API: matching documents
+    API-->>Client: {documents, prompt}
 
-    Note over User: User can now call vLLM with the prompt
-    User->>LLM: POST /v1/completions {prompt: "..."}
-    LLM-->>User: Generated answer based on context
+    Client->>LLM: POST /v1/chat/completions
+    LLM-->>Client: generated response
 ```
 
 ## Quick Start
 
-1. **Prerequisites**
-   - Docker and Docker Compose installed
-   - Ports 3000, 5432, and 8000 available
-   - At least 4GB RAM (for vLLM model)
+### Prerequisites
+- Docker and Docker Compose
+- Ports 3000 and 5432 available
+- Access to an OpenAI-compatible LLM endpoint (Ollama, vLLM, OpenAI, etc.)
 
-2. **Start the system**
+### Setup
+
+1. **Configure environment**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your LLM endpoint details
+   ```
+
+2. **Start services**
    ```bash
    docker-compose up -d
    ```
 
-3. **Wait for services to be ready** (vLLM takes ~30s to load the model)
+3. **Run integration tests**
    ```bash
-   # Check logs
-   docker-compose logs -f vllm
+   ./test.sh
    ```
 
-4. **Test the RAG system**
-   ```bash
-   # Search documents
-   curl "http://localhost:3000/rpc/search_documents" \
-     -H "Content-Type: application/json" \
-     -d '{"query_text": "python", "limit_count": 3}'
+   The test script demonstrates all API operations and validates the complete RAG workflow. See [test.sh](test.sh) for detailed usage examples.
 
-   # Get RAG query with prompt
-   curl "http://localhost:3000/rpc/rag_query" \
-     -H "Content-Type: application/json" \
-     -d '{"user_query": "How does Python work?"}'
-
-   # Call vLLM directly
-   curl "http://localhost:8000/v1/completions" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "model": "microsoft/Phi-3-mini-4k-instruct",
-       "prompt": "What is Python?",
-       "max_tokens": 100
-     }'
-   ```
-
-5. **Stop the system**
+4. **Stop services**
    ```bash
    docker-compose down
    ```
 
-## Core Components
+## Components
 
-### 1. Plain PostgreSQL
-- **Purpose**: Document storage and simple text search
-- **Features**:
-  - Simple keyword-based document retrieval
-  - Full-text search indexes (GIN)
-  - No complex extensions needed
-- **Why Simple?**:
-  - Easy to understand and debug
-  - No vector embeddings complexity
-  - Fast to set up
+### PostgreSQL
+Document storage with keyword-based text search. No vector extensions needed.
 
-### 2. PostgREST
-- **Purpose**: Auto-generated REST API from database schema
-- **Features**:
-  - Zero-code API endpoints
-  - Direct function calls via `/rpc/` endpoints
-- **Benefits**:
-  - No API layer to write
-  - Database functions become API endpoints
+### PostgREST
+Auto-generated REST API from database schema. Database functions become API endpoints.
 
-### 3. LLM Endpoint (External or Local)
-- **Purpose**: LLM inference for generating responses
-- **Options**:
-  - **External vLLM**: Point to your existing vLLM server
-  - **OpenAI API**: Use GPT-3.5/GPT-4
-  - **Local vLLM**: Optional docker container (see docker-compose.vllm.yml)
-- **Benefits**:
-  - Flexible deployment
-  - Works with any OpenAI-compatible API
-  - No vendor lock-in
+### LLM Endpoint (External)
+Any OpenAI-compatible API:
+- **Ollama** - Local open-source models
+- **vLLM** - High-performance inference server
+- **OpenAI** - GPT-3.5/GPT-4
+- **Azure OpenAI** - Enterprise deployment
 
-## API Endpoints
+## API Reference
 
-### PostgREST API (Port 3000)
+### PostgREST (Port 3000)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/hello` | GET | Test endpoint returning "hello world" |
-| `/rag_documents` | GET | List all documents |
-| `/rag_documents` | POST | Add new document |
-| `/conversations` | GET | View conversation history |
-| `/conversations` | POST | Save conversation |
-| `/rpc/search_documents` | POST | Search docs by keywords |
-| `/rpc/rag_query` | POST | Get docs + formatted prompt for LLM |
+| `/hello` | GET | Health check |
+| `/rag_documents` | GET | List documents |
+| `/rag_documents` | POST | Add document |
+| `/conversations` | GET/POST | Conversation history |
+| `/rpc/search_documents` | POST | Search by keywords |
+| `/rpc/rag_query` | POST | Get documents + LLM prompt |
 
-### LLM API (Configurable Endpoint)
+**See [test.sh](test.sh) for complete API usage examples with curl commands.**
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/v1/completions` | POST | Text completion (OpenAI compatible) |
-| `/v1/chat/completions` | POST | Chat completion |
-| `/health` | GET | Health check (vLLM) |
-| `/v1/models` | GET | List available models |
+## How It Works
 
-## How RAG Works (Simplified)
+1. **Store** documents in PostgreSQL
+2. **Search** using keyword matching (title + content)
+3. **Retrieve** top-matching documents with relevance scores
+4. **Build** prompt with document context
+5. **Generate** response using external LLM
 
-1. **Document Storage**: Documents stored in PostgreSQL with title + content
-2. **Search**: Keyword matching (no embeddings needed)
-   - Searches in both title and content
-   - Scores based on word frequency
-3. **Context Building**: Top matching docs formatted into a prompt
-4. **LLM Call**: Client calls vLLM with the generated prompt
-5. **Response**: LLM generates answer based on context
-
-## Example: Complete RAG Flow
-
-```bash
-# 1. Search for documents about Python
-curl "http://localhost:3000/rpc/search_documents" \
-  -H "Content-Type: application/json" \
-  -d '{"query_text": "python programming", "limit_count": 3}'
-
-# Response:
-# [
-#   {
-#     "id": 1,
-#     "title": "Python Basics",
-#     "content": "Python is a high-level programming language...",
-#     "relevance": 4
-#   }
-# ]
-
-# 2. Get RAG query with auto-generated prompt
-curl "http://localhost:3000/rpc/rag_query" \
-  -H "Content-Type: application/json" \
-  -d '{"user_query": "What is Python used for?"}'
-
-# Response includes:
-# {
-#   "query": "What is Python used for?",
-#   "documents": [...],
-#   "prompt": "Context documents:\n\nDocument 1 - Python Basics: ...\n\nUser question: What is Python used for?\n\nPlease answer..."
-# }
-
-# 3. Send prompt to vLLM
-curl "http://localhost:8000/v1/completions" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "microsoft/Phi-3-mini-4k-instruct",
-    "prompt": "Context documents:\n\nDocument 1 - Python Basics: Python is a high-level programming language. It uses indentation for code blocks and has dynamic typing.\n\nUser question: What is Python used for?\n\nPlease answer the question based on the context documents provided above.",
-    "max_tokens": 200
-  }'
-```
-
-## Adding Your Own Documents
-
-```bash
-# Add a new document
-curl -X POST "http://localhost:3000/rag_documents" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "Kubernetes Guide",
-    "content": "Kubernetes is a container orchestration platform...",
-    "metadata": {"category": "devops"}
-  }'
-
-# Now it will be searchable
-curl "http://localhost:3000/rpc/search_documents" \
-  -H "Content-Type: application/json" \
-  -d '{"query_text": "kubernetes", "limit_count": 5}'
-```
-
-## Why This Simplified Approach?
-
-**Removed Complexity:**
-- ❌ No PostgresML (complex ML in database)
-- ❌ No vector embeddings (simpler keyword search)
-- ❌ No pg_cron (no background jobs needed)
-- ❌ No training pipelines (using pre-trained model)
-
-**What You Get:**
-- ✅ Easy to understand architecture
-- ✅ Fast setup (< 1 minute)
-- ✅ Standard components (Postgres, REST API, LLM)
-- ✅ Demonstrates RAG concept clearly
-- ✅ Production patterns (can scale up later)
-
-## Next Steps / Future Enhancements
-
-1. **Add Vector Search**: Use pgvector for semantic search
-2. **Add Embeddings**: Generate embeddings for documents
-3. **Frontend**: Build a simple web UI
-4. **Caching**: Add Redis for LLM response caching
-5. **Auth**: Add API key authentication
-6. **Monitoring**: Add Prometheus + Grafana
-7. **Scaling**: Move to Kubernetes
 
 ## Configuration
 
-### Environment Variables
+Copy [.env.example](.env.example) to `.env` and configure your LLM endpoint:
 
-Create a `.env` file from `.env.example`:
+| Provider | LLM_ENDPOINT | LLM_MODEL | LLM_API_KEY |
+|----------|--------------|-----------|-------------|
+| **Ollama** | `http://localhost:11434` | `llama2` | (empty) |
+| **vLLM** | `https://your-vllm-server.com` | `meta-llama/Llama-2-7b-chat-hf` | (empty or token) |
+| **OpenAI** | `https://api.openai.com/v1` | `gpt-3.5-turbo` | `sk-your-key` |
+| **Azure OpenAI** | `https://<resource>.openai.azure.com/openai/deployments/<deployment>` | `gpt-35-turbo` | `your-azure-key` |
 
-```bash
-cp .env.example .env
+## Project Structure
+
+```
+.
+├── docker-compose.yml      # PostgreSQL + PostgREST services
+├── docker-compose.vllm.yml # Optional: Local vLLM deployment
+├── init.sql                # Database schema + RAG functions
+├── test.sh                 # Integration tests + API usage examples
+├── .env.example            # Configuration template
+└── README.md
 ```
 
-Key configuration options:
+## Features
 
-```bash
-# PostgreSQL
-POSTGRES_DB=poolside
-POSTGRES_USER=poolside_user
-POSTGRES_PASSWORD=poolside_pass
-POSTGRES_PORT=5432
+- ✅ Simple keyword-based document search
+- ✅ Auto-generated REST API
+- ✅ Works with any OpenAI-compatible endpoint
+- ✅ No ML frameworks or vector databases required
+- ✅ Easy to understand and modify
 
-# PostgREST
-POSTGREST_PORT=3000
+## Future Enhancements
 
-# LLM Configuration
-LLM_ENDPOINT=http://localhost:8000        # Your vLLM or OpenAI endpoint
-LLM_API_KEY=                               # API key if needed
-LLM_MODEL=microsoft/Phi-3-mini-4k-instruct # Model name
-```
-
-### Using Different LLM Providers
-
-**Local vLLM:**
-```bash
-LLM_ENDPOINT=http://localhost:8000
-LLM_MODEL=microsoft/Phi-3-mini-4k-instruct
-LLM_API_KEY=
-```
-
-**Remote vLLM:**
-```bash
-LLM_ENDPOINT=https://your-vllm-server.com
-LLM_MODEL=meta-llama/Llama-2-7b-chat-hf
-LLM_API_KEY=
-```
-
-**OpenAI:**
-```bash
-LLM_ENDPOINT=https://api.openai.com/v1
-LLM_MODEL=gpt-3.5-turbo
-LLM_API_KEY=sk-your-api-key-here
-```
-
-**Azure OpenAI:**
-```bash
-LLM_ENDPOINT=https://your-resource.openai.azure.com/openai/deployments/your-deployment
-LLM_MODEL=gpt-35-turbo
-LLM_API_KEY=your-azure-key
-```
-
-## Files Included
-
-- [docker-compose.yml](docker-compose.yml) - Core services (PostgreSQL + PostgREST)
-- [docker-compose.vllm.yml](docker-compose.vllm.yml) - Optional local vLLM service
-- [init.sql](init.sql) - Database initialization
-- [.env.example](.env.example) - Configuration template
-- [test.sh](test.sh) - Automated testing script
-- [README.md](README.md) - This documentation
+- Add pgvector for semantic search
+- Implement document embeddings
+- Build web UI
+- Add response caching
+- Implement authentication

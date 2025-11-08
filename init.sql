@@ -64,12 +64,16 @@ BEGIN
         d.content,
         -- Simple relevance scoring based on keyword matching
         (
-            -- Count how many words from query appear in title (weighted 2x)
+            -- Exact phrase match in title (weighted 10x)
+            CASE WHEN lower(d.title) LIKE '%' || lower(query_text) || '%' THEN 10.0 ELSE 0.0 END +
+            -- Exact phrase match in content (weighted 5x)
+            CASE WHEN lower(d.content) LIKE '%' || lower(query_text) || '%' THEN 5.0 ELSE 0.0 END +
+            -- Count significant words (3+ chars) from query that appear in title (weighted 2x)
             (SELECT COUNT(*) FROM unnest(string_to_array(lower(query_text), ' ')) AS word
-             WHERE lower(d.title) LIKE '%' || word || '%') * 2.0 +
-            -- Count how many words from query appear in content
+             WHERE length(word) >= 3 AND lower(d.title) LIKE '%' || word || '%') * 2.0 +
+            -- Count significant words (3+ chars) from query that appear in content
             (SELECT COUNT(*) FROM unnest(string_to_array(lower(query_text), ' ')) AS word
-             WHERE lower(d.content) LIKE '%' || word || '%')
+             WHERE length(word) >= 3 AND lower(d.content) LIKE '%' || word || '%')
         )::FLOAT AS relevance
     FROM api.rag_documents d
     WHERE
@@ -77,7 +81,7 @@ BEGIN
         lower(d.content) LIKE '%' || lower(query_text) || '%' OR
         EXISTS (
             SELECT 1 FROM unnest(string_to_array(lower(query_text), ' ')) AS word
-            WHERE lower(d.title) LIKE '%' || word || '%' OR lower(d.content) LIKE '%' || word || '%'
+            WHERE length(word) >= 3 AND (lower(d.title) LIKE '%' || word || '%' OR lower(d.content) LIKE '%' || word || '%')
         )
     ORDER BY relevance DESC
     LIMIT limit_count;
